@@ -8,6 +8,5 @@ ENV/
 .vscode/
 .idea/
 *.log
-*.stl
 *.zip
 *.tar.gz
