@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, '/home/min/3drecord')
+sys.path.insert(0, '/home/lair/3drecord')
 import cv2
 import numpy as np
 import mediapipe as mp

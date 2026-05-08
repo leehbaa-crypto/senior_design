@@ -6,7 +6,7 @@ iPhone camera tracker, and controls the real SO-101 arm to avoid hands
 and look toward faces.
 
 Usage:
-    source /opt/ros/jazzy/setup.bash
+    source /opt/ros/humble/setup.bash
     python3 run_real_avoidance.py --port /dev/ttyACM0
 """
 
@@ -89,7 +89,7 @@ def main():
     print(f"[Robot] Connected on {args.port}")
 
     # Kinematics init
-    urdf_path = '/home/min/senior_design/urdf/so101.urdf'
+    urdf_path = '/home/lair/senior_design/urdf/so101.urdf'
     joint_names = ['shoulder_pan', 'shoulder_lift', 'elbow_flex',
                    'wrist_flex', 'wrist_roll']
     kin = RobotKinematics(urdf_path, target_frame_name='gripper_frame_link',
