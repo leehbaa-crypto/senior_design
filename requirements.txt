@@ -1,5 +1,5 @@
 pyrealsense2==2.53.1.4623
-mediapipe==0.10.15
+mediapipe==0.10.14
 opencv-python==4.13.0.92
 mujoco>=3.0.0
 ikpy==3.3.3

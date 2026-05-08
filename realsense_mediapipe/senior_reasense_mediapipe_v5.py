@@ -1,8 +1,9 @@
 import sys
+sys.path.insert(0, '/home/min/3drecord')
 import cv2
 import numpy as np
 import mediapipe as mp
-import pyrealsense2 as rs
+import iphone_realsense as rs
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point
@@ -25,17 +26,17 @@ class UltraLightMultiTracker(Node):
         self.hands = self.mp_hands.Hands(max_num_hands=2, model_complexity=0, min_detection_confidence=0.5, min_tracking_confidence=0.5)
         self.face_mesh = self.mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=False, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
-        self.pipeline = rs.pipeline()
-        config = rs.config()
-        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-        
+        self.pipeline = rs.Pipeline()
+        self.config = rs.Config()
+        self.config.set_option('mode', 'tailscale')
+        self.config.set_option('camera', 'front')
+
         try:
-            profile = self.pipeline.start(config)
-            self.align = rs.align(rs.stream.color)
-            self.intr = profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
+            self.pipeline.start(self.config)
+            self.align = rs.Align(rs.stream.color)
+            self.intr = {"fx": 1040.0, "fy": 1040.0, "cx": 640.0, "cy": 360.0}
         except Exception as e:
-            self.get_logger().error(f"RealSense Error: {e}")
+            self.get_logger().error(f"iPhone Camera Error: {e}")
             sys.exit(1)
 
         self.size_to_depth_c = {"Left": 40.0, "Right": 40.0} 
@@ -43,16 +44,25 @@ class UltraLightMultiTracker(Node):
         self.vision_thread = threading.Thread(target=self.camera_loop)
         self.vision_thread.start()
 
+    def deproject(self, u, v, depth):
+        fx, fy = self.intr["fx"], self.intr["fy"]
+        cx, cy = self.intr["cx"], self.intr["cy"]
+        X = (u - cx) * depth / fx
+        Y = (v - cy) * depth / fy
+        return [X, Y, depth]
+
     def camera_loop(self):
         while self.is_running and rclpy.ok():
             start_time = time.time()
-            frames = self.pipeline.wait_for_frames()
+            frames = self.pipeline.wait_for_frames(timeout_ms=1000)
+            if not frames: continue
             aligned = self.align.process(frames)
-            color_frame, depth_frame = aligned.get_color_frame(), aligned.get_depth_frame()
+            color_frame = aligned.get_front_color_frame()
+            depth_frame = aligned.get_front_depth_frame()
             if not color_frame or not depth_frame: continue
 
             image = np.asanyarray(color_frame.get_data())
-            display = cv2.flip(image, 1) 
+            display = image
             rgb_display = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
             
             hand_results = self.hands.process(rgb_display)
@@ -66,13 +76,16 @@ class UltraLightMultiTracker(Node):
                         None, self.mp_drawing_styles.get_default_face_mesh_contours_style())
                     
                     # 1번 랜드마크(코 끝) 좌표 추출
-                    nx, ny = int(face_landmarks.landmark[1].x * 640), int(face_landmarks.landmark[1].y * 480)
-                    if 20 < nx < 620 and 20 < ny < 460:
-                        depth_nx = min(639, max(0, 639 - nx)) # 거울 모드 보정
+                    h, w = image.shape[:2]
+                    nx, ny = int(face_landmarks.landmark[1].x * w), int(face_landmarks.landmark[1].y * h)
+                    if 20 < nx < w - 20 and 20 < ny < h - 20:
+                        depth_nx = min(w - 1, max(0, nx))
                         face_dist = depth_frame.get_distance(depth_nx, ny)
-                        
+
+                        self.get_logger().info(f"[Face] nx={nx}, ny={ny}, depth={face_dist:.3f}m, img={w}x{h}")
+
                         if 0.2 < face_dist < 2.5: # 얼굴 인식 유효 거리
-                            p3d = rs.rs2_deproject_pixel_to_point(self.intr, [depth_nx, ny], face_dist)
+                            p3d = self.deproject(depth_nx, ny, face_dist)
                             msg = Point(x=float(p3d[0]), y=float(p3d[1]), z=float(p3d[2]))
                             self.face_pub.publish(msg)
                             # 코 끝에 노란 점 표시
@@ -82,12 +95,12 @@ class UltraLightMultiTracker(Node):
                 for idx, hand_landmarks in enumerate(hand_results.multi_hand_landmarks):
                     label = hand_results.multi_handedness[idx].classification[0].label 
                     
-                    cx, cy = int(hand_landmarks.landmark[9].x * 640), int(hand_landmarks.landmark[9].y * 480)
-                    wx, wy = int(hand_landmarks.landmark[0].x * 640), int(hand_landmarks.landmark[0].y * 480)
+                    cx, cy = int(hand_landmarks.landmark[9].x * 1280), int(hand_landmarks.landmark[9].y * 720)
+                    wx, wy = int(hand_landmarks.landmark[0].x * 1280), int(hand_landmarks.landmark[0].y * 720)
 
-                    if 20 < cx < 620 and 20 < cy < 460: 
+                    if 20 < cx < 1260 and 20 < cy < 700:
                         hand_len_px = max(5.0, np.sqrt((cx - wx)**2 + (cy - wy)**2))
-                        depth_x = min(639, max(0, 639 - cx)) 
+                        depth_x = min(1279, max(0, cx))
                         raw_dist = depth_frame.get_distance(depth_x, cy)
                         
                         if 0.35 < raw_dist < 1.2 and hand_len_px > 40:
@@ -96,8 +109,8 @@ class UltraLightMultiTracker(Node):
                         else:
                             final_dist = self.size_to_depth_c[label] / hand_len_px
 
-                        if 0.05 < final_dist < 2.0: 
-                            p3d = rs.rs2_deproject_pixel_to_point(self.intr, [depth_x, cy], final_dist)
+                        if 0.05 < final_dist < 2.0:
+                            p3d = self.deproject(depth_x, cy, final_dist)
                             msg = Point(x=float(p3d[0]), y=float(p3d[1]), z=float(p3d[2]))
                             
                             if label == "Left": self.left_pub.publish(msg)
