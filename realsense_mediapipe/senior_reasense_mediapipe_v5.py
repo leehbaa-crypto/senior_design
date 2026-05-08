@@ -1,5 +1,6 @@
 import sys
 sys.path.insert(0, '/home/lair/3drecord')
+import math
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -7,6 +8,7 @@ import iphone_realsense as rs
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Point
+from std_msgs.msg import Float32
 import threading
 import time
 
@@ -17,6 +19,7 @@ class UltraLightMultiTracker(Node):
         self.right_pub = self.create_publisher(Point, '/right_hand', 10)
         # [추가] 얼굴 좌표 전송용 퍼블리셔
         self.face_pub = self.create_publisher(Point, '/face_pose', 10)
+        self.roll_pub = self.create_publisher(Float32, '/face_roll', 10)
 
         self.mp_hands = mp.solutions.hands
         self.mp_face_mesh = mp.solutions.face_mesh
@@ -90,6 +93,18 @@ class UltraLightMultiTracker(Node):
                             self.face_pub.publish(msg)
                             # 코 끝에 노란 점 표시
                             cv2.circle(display, (nx, ny), 6, (0, 255, 255), -1)
+
+                            # 눈 기울기 (roll) — landmark 33=왼쪽 눈 바깥, 263=오른쪽 눈 바깥
+                            le = face_landmarks.landmark[33]
+                            re = face_landmarks.landmark[263]
+                            roll_rad = math.atan2(re.y - le.y, re.x - le.x)
+                            self.roll_pub.publish(Float32(data=float(roll_rad)))
+                            # 눈 위치 시각화
+                            lex, ley = int(le.x * w), int(le.y * h)
+                            rex, rey = int(re.x * w), int(re.y * h)
+                            cv2.circle(display, (lex, ley), 4, (255, 0, 0), -1)
+                            cv2.circle(display, (rex, rey), 4, (255, 0, 0), -1)
+                            cv2.line(display, (lex, ley), (rex, rey), (255, 0, 0), 2)
 
             if hand_results.multi_hand_landmarks:
                 for idx, hand_landmarks in enumerate(hand_results.multi_hand_landmarks):
